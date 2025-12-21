@@ -1,5 +1,6 @@
-functions-framework==3.5.0
-flask==3.0.0
-requests==2.31.0
-google-cloud-firestore==2.14.0
-firebase-admin==6.4.0
+fastapi
+uvicorn
+requests
+google-cloud-firestore
+functions-framework
+python-dotenv
