@@ -6,3 +6,4 @@ backend/functions/__pycache__/
 .idea/
 venv/
 .python-version
+sendgrid.env

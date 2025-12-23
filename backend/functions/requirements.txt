@@ -4,3 +4,4 @@ requests
 google-cloud-firestore
 functions-framework
 python-dotenv
+sendgrid

@@ -1,10 +1,11 @@
 from fastapi import FastAPI, Query, HTTPException
 from google.cloud import firestore
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import requests
 import json
 import os
 import risk_engine
+import notifier
 
 app = FastAPI(title="Disaster Alert System")
 
@@ -21,32 +22,88 @@ except Exception as e:
     db = None
 
 
+def normalize_location(location: str) -> str:
+    """Standardizes location names for consistent database keys and URL handling."""
+    return location.strip().lower().replace(" ", "_")
+
+
 def save_weather_data(location: str, weather_data: dict, coordinates: tuple = (None, None)):
-    """Saves only the latest weather data to Firestore."""
+    """Saves weather snapshot to Firestore history and updates latest cache."""
     if not db:
         return False
 
     try:
-        doc_ref = db.collection('places').document(location.lower())
-        
-        # Add timestamp to current reading
-        weather_data['captured_at'] = datetime.now(timezone.utc).isoformat()
+        # 1. Update Latest Snapshot (for quick dashboard access)
+        # Assumes location is already normalized
+        doc_ref = db.collection('places').document(location)
+        timestamp = datetime.now(timezone.utc)
+        weather_data['captured_at'] = timestamp.isoformat()
         
         update_payload = {
             'location': location,
             'weather': weather_data,
-            'updated_at': datetime.now(timezone.utc)
+            'updated_at': timestamp
         }
-        
         if coordinates[0] is not None:
             update_payload['coordinates'] = {'lat': coordinates[0], 'lon': coordinates[1]}
-            
+        
         doc_ref.set(update_payload, merge=True)
-        print(f"Latest data saved for {location}")
+
+        # 2. Add to Historical Sub-collection (Hourly Bucketing)
+        hour_id = timestamp.strftime("%Y%m%d%H") 
+        history_ref = doc_ref.collection('history').document(hour_id)
+        
+        # We store the latest reading for this hour, explicitly including hour_id
+        history_data = {**weather_data, "timestamp": timestamp, "hour_id": hour_id}
+        history_ref.set(history_data, merge=True)
+
+        print(f"Hourly record ({hour_id}) updated for {location}")
+        
+        # 3. Cleanup: Maintain a Rolling Cache (Delete records older than 48 hours)
+        # This prevents the database from growing indefinitely.
+        cleanup_cutoff = timestamp - timedelta(hours=48)
+        old_docs = doc_ref.collection('history').where('timestamp', '<', cleanup_cutoff).stream()
+        
+        deleted_count = 0
+        for old_doc in old_docs:
+            old_doc.reference.delete()
+            deleted_count += 1
+            
+        if deleted_count > 0:
+            print(f"Cleaned up {deleted_count} stale records for {location}")
+
         return True
     except Exception as e:
         print(f"Error saving to Firestore: {e}")
         return False
+
+
+def get_weather_history(location: str, hours: int = 24):
+    """Retrieves recent weather observations for persistence analysis."""
+    if not db:
+        return []
+    
+    try:
+        cutoff = datetime.now(timezone.utc).timestamp() - (hours * 3600)
+        cutoff_dt = datetime.fromtimestamp(cutoff, tz=timezone.utc)
+        
+        history_query = db.collection('places').document(location) \
+            .collection('history') \
+            .where('timestamp', '>=', cutoff_dt) \
+            .order_by('timestamp', direction=firestore.Query.DESCENDING)
+        
+        docs = history_query.stream()
+        history = []
+        for doc in docs:
+            data = doc.to_dict()
+            # Convert Firestore timestamp to ISO string if needed for logic
+            if 'timestamp' in data:
+                data['timestamp'] = data['timestamp'].isoformat()
+            history.append(data)
+        return history
+    except Exception as e:
+        print(f"Error fetching history: {e}")
+        return []
 
 
 def get_coordinates(location: str):
@@ -74,6 +131,47 @@ from fastapi import BackgroundTasks
 
 # Configurable list of places to monitor
 MONITORED_PLACES = ["Mumbai", "Delhi", "Chennai", "Kolkata", "Bangalore", "Hyderabad", "Pune", "Ahmedabad"]
+LAST_BG_INGEST = datetime.min.replace(tzinfo=timezone.utc) # Cooldown tracker
+
+def check_and_trigger_alerts(loc_name, risk_res, background_tasks=None):
+    """
+    Checks if risk is high and sends email alerts to users in the affected location.
+    If background_tasks is provided, it uses FastAPI's background tasks.
+    Otherwise, it sends emails synchronously (suitable for background jobs).
+    """
+    if risk_res.get('risk_level') == "HIGH":
+        print(f"HIGH RISK detected for {loc_name}. Triggering alerts...")
+        try:
+            base_path = os.path.dirname(os.path.abspath(__file__))
+            users_path = os.path.join(base_path, 'mock_data', 'users.json')
+            if not os.path.exists(users_path):
+                print(f"User data file not found at {users_path}")
+                return
+
+            with open(users_path, 'r') as f:
+                users_data = json.load(f)
+                matching_users = [u for u in users_data.get('users', []) if u.get('home_location') == normalize_location(loc_name)]
+                
+                print(f"Found {len(matching_users)} users in {loc_name}. Sending alerts...")
+                
+                for user in matching_users:
+                    if background_tasks:
+                        background_tasks.add_task(
+                            notifier.send_high_risk_alert,
+                            user['email'],
+                            user['name'],
+                            loc_name,
+                            risk_res
+                        )
+                    else:
+                        notifier.send_high_risk_alert(
+                            user['email'],
+                            user['name'],
+                            loc_name,
+                            risk_res
+                        )
+        except Exception as alert_err:
+            print(f"Error triggering alerts for {loc_name}: {alert_err}")
 
 @app.get("/weather")
 async def get_weather_risk(
@@ -81,7 +179,11 @@ async def get_weather_risk(
     location: str = Query("Mumbai"),
     simulation: str = Query(None, description="Scenario for simulation (e.g., flood, normal)")
 ):
-    print(f"\n--- REQUEST: {location} (Simulation: {simulation}) ---")
+    # Normalize location for consistent DB mapping
+    original_name = location
+    location = normalize_location(original_name)
+    
+    print(f"\n--- REQUEST: {location} (Original: {original_name}, Simulation: {simulation}) ---")
     
     # 1. Check for Simulation (Mocking)
     if simulation:
@@ -90,24 +192,38 @@ async def get_weather_risk(
             raise HTTPException(status_code=404, detail=f"Simulation scenario '{simulation}' not found")
         
         weather_data["location"] = location
-        weather_data["captured_at"] = datetime.now(timezone.utc).isoformat()
-        risk_result = risk_engine.evaluate_risk(weather_data)
+        ts = datetime.now(timezone.utc)
+        weather_data["captured_at"] = ts.isoformat()
+        
+        # ENRICHMENT: Create a mock 6-hour history so persistence logic triggers
+        # Injecting 6 hourly snapshots of the same simulation data
+        mock_history = []
+        for i in range(7): # Current + 6 hours back
+            hist_ts = ts - timedelta(hours=i)
+            mock_snap = {**weather_data, "timestamp": hist_ts.isoformat(), "hour_id": hist_ts.strftime("%Y%m%d%H")}
+            mock_history.append(mock_snap)
+            
+        risk_result = risk_engine.evaluate_risk(mock_history)
+        
+        # Check and trigger alerts
+        check_and_trigger_alerts(location, risk_result, background_tasks)
         
         return {
             "status": "success",
             "source": "simulation",
             "location": location,
             "data": weather_data,
-            "risk_assessment": risk_result
+            "risk_assessment": risk_result,
+            "history_count": len(mock_history)
         }
 
     # 2. Attempt Live API Fetch
     api_error = None
     weather_data = None
     try:
-        lat, lon = get_coordinates(location)
+        lat, lon = get_coordinates(original_name)
         if lat is None:
-            raise HTTPException(status_code=404, detail=f"Location '{location}' not found")
+            raise HTTPException(status_code=404, detail=f"Location '{original_name}' not found")
 
         weather_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,relative_humidity_2m,rain,wind_speed_10m,cloud_cover"
         resp = requests.get(weather_url, timeout=5)
@@ -134,7 +250,7 @@ async def get_weather_risk(
     # 3. Fallback to Database Cache if API failed
     if not weather_data:
         if db:
-            doc_ref = db.collection('places').document(location.lower())
+            doc_ref = db.collection('places').document(location)
             doc = doc_ref.get()
             if doc.exists:
                 data = doc.to_dict()
@@ -147,11 +263,30 @@ async def get_weather_risk(
         else:
             raise HTTPException(status_code=503, detail=f"Weather service unavailable: {api_error}")
 
-    # 4. Evaluate Risk
-    risk_result = risk_engine.evaluate_risk(weather_data)
+    # 4. Evaluate Risk based on History
+    history = get_weather_history(location, hours=24)
+    current_hour_id = datetime.now(timezone.utc).strftime("%Y%m%d%H")
+    
+    # De-duplicate: If the latest history from DB is already for the current hour,
+    # we don't need to manually insert the 'weather_data' we just fetched.
+    if weather_data:
+        has_current_hour = any(h.get('hour_id') == current_hour_id for h in history)
+        if not has_current_hour:
+            # Inject current data at the start if it wasn't in the DB stream yet
+            current_snapshot = {**weather_data, "timestamp": datetime.now(timezone.utc).isoformat(), "hour_id": current_hour_id}
+            history.insert(0, current_snapshot)
+
+    risk_result = risk_engine.evaluate_risk(history)
+    
+    # Check and trigger alerts
+    check_and_trigger_alerts(location, risk_result, background_tasks)
     
     # Proactively update other places in background if this is a live request
-    if source == "live_api":
+    # Cooldown check: Only refresh background data every 15 minutes
+    global LAST_BG_INGEST
+    now = datetime.now(timezone.utc)
+    if source == "live_api" and (now - LAST_BG_INGEST).total_seconds() > 900:
+        LAST_BG_INGEST = now
         background_tasks.add_task(ingest_weather)
 
     return {
@@ -159,7 +294,8 @@ async def get_weather_risk(
         "source": source,
         "location": location,
         "data": weather_data,
-        "risk_assessment": risk_result
+        "risk_assessment": risk_result,
+        "history_count": len(history)
     }
 
 @app.get("/refresh")
@@ -193,7 +329,20 @@ def ingest_weather(event=None, context=None):
                 "location": place
             }
             
-            save_weather_data(place, weather, (lat, lon))
+            save_weather_data(normalize_location(place), weather, (lat, lon))
+            
+            # Evaluate risk and trigger alerts during ingestion
+            history = get_weather_history(normalize_location(place), hours=24)
+            if weather:
+                current_hour_id = datetime.now(timezone.utc).strftime("%Y%m%d%H")
+                has_current_hour = any(h.get('hour_id') == current_hour_id for h in history)
+                if not has_current_hour:
+                    current_snapshot = {**weather, "timestamp": datetime.now(timezone.utc).isoformat(), "hour_id": current_hour_id}
+                    history.insert(0, current_snapshot)
+            
+            risk_result = risk_engine.evaluate_risk(history)
+            check_and_trigger_alerts(place, risk_result)
+            
         except Exception as e:
             print(f"Failed to ingest {place}: {e}")
             
