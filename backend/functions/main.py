@@ -1,13 +1,25 @@
 from fastapi import FastAPI, Query, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from google.cloud import firestore
 from datetime import datetime, timezone, timedelta
 import requests
 import json
 import os
+import threading
+import time
 import risk_engine
 import notifier
 
 app = FastAPI(title="Disaster Alert System")
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Initialize Firestore
 # Note: Ensure GOOGLE_APPLICATION_CREDENTIALS is set or you are logged in via gcloud
@@ -220,10 +232,23 @@ async def get_weather_risk(
     # 2. Attempt Live API Fetch
     api_error = None
     weather_data = None
+    lat, lon = None, None
+
     try:
-        lat, lon = get_coordinates(original_name)
+        # Optimization: Check DB for coordinates first to avoid slow geocoding API
+        if db:
+            doc_ref = db.collection('places').document(location)
+            doc = doc_ref.get()
+            if doc.exists:
+                data = doc.to_dict()
+                coords = data.get('coordinates', {})
+                lat, lon = coords.get('lat'), coords.get('lon')
+                print(f"Using cached coordinates for {location}: {lat}, {lon}")
+
         if lat is None:
-            raise HTTPException(status_code=404, detail=f"Location '{original_name}' not found")
+            lat, lon = get_coordinates(original_name)
+            if lat is None:
+                raise HTTPException(status_code=404, detail=f"Location '{original_name}' not found")
 
         weather_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,relative_humidity_2m,rain,wind_speed_10m,cloud_cover"
         resp = requests.get(weather_url, timeout=5)
@@ -239,8 +264,8 @@ async def get_weather_risk(
             "location": location
         }
         
-        # Save to database (Latest only)
-        save_weather_data(location, weather_data, (lat, lon))
+        # Move database saving to background to speed up response
+        background_tasks.add_task(save_weather_data, location, weather_data, (lat, lon))
         source = "live_api"
 
     except Exception as e:
@@ -295,7 +320,8 @@ async def get_weather_risk(
         "location": location,
         "data": weather_data,
         "risk_assessment": risk_result,
-        "history_count": len(history)
+        "history_count": len(history),
+        "history": history  # Include actual historical data for charts
     }
 
 @app.get("/refresh")
@@ -307,13 +333,57 @@ async def manual_refresh(background_tasks: BackgroundTasks):
 
 
 def ingest_weather(event=None, context=None):
-    """Ingests data for all monitored places."""
-    print(f"Starting ingestion for {len(MONITORED_PLACES)} locations...")
+    """Ingests data for all monitored places and any existing locations in Firestore."""
+    print(f"\n--- [SCHEDULER] Starting Global Ingestion: {datetime.now()} ---")
     
-    for place in MONITORED_PLACES:
+    # 1. Identify all places to update
+    # We combine the hardcoded MONITORED_PLACES with whatever is already in the DB
+    places_to_process = [] # List of dicts: {'name': str, 'lat': float, 'lon': float}
+    
+    # Add hardcoded defaults
+    for p in MONITORED_PLACES:
+        places_to_process.append({'name': p, 'lat': None, 'lon': None})
+
+    # Add dynamic places from DB
+    if db:
         try:
-            lat, lon = get_coordinates(place)
-            if not lat: continue
+            docs = db.collection('places').stream()
+            for doc in docs:
+                data = doc.to_dict()
+                loc_id = doc.id
+                coords = data.get('coordinates', {})
+                # Use normalized ID as name if original not found, but prefer stored coords
+                places_to_process.append({
+                    'name': data.get('location', loc_id), 
+                    'lat': coords.get('lat'), 
+                    'lon': coords.get('lon')
+                })
+        except Exception as e:
+            print(f"Error fetching existing places from DB: {e}")
+
+    # De-duplicate by normalized name to avoid double-fetching
+    seen = set()
+    unique_places = []
+    for p in places_to_process:
+        norm = normalize_location(p['name'])
+        if norm not in seen:
+            seen.add(norm)
+            unique_places.append(p)
+
+    print(f"Found {len(unique_places)} unique locations to update.")
+    
+    for place in unique_places:
+        try:
+            name = place['name']
+            lat, lon = place['lat'], place['lon']
+            
+            # Geocode only if we don't have coords
+            if lat is None or lon is None:
+                lat, lon = get_coordinates(name)
+            
+            if lat is None:
+                print(f"Skipping {name}: Could not determine coordinates.")
+                continue
                 
             weather_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,relative_humidity_2m,rain,wind_speed_10m,cloud_cover"
             resp = requests.get(weather_url, timeout=5)
@@ -326,32 +396,53 @@ def ingest_weather(event=None, context=None):
                 "rain_1h": api_data.get('rain', 0.0),
                 "clouds": api_data['cloud_cover'],
                 "humidity": api_data['relative_humidity_2m'],
-                "location": place
+                "location": normalize_location(name)
             }
             
-            save_weather_data(normalize_location(place), weather, (lat, lon))
+            save_weather_data(normalize_location(name), weather, (lat, lon))
             
-            # Evaluate risk and trigger alerts during ingestion
-            history = get_weather_history(normalize_location(place), hours=24)
-            if weather:
-                current_hour_id = datetime.now(timezone.utc).strftime("%Y%m%d%H")
-                has_current_hour = any(h.get('hour_id') == current_hour_id for h in history)
-                if not has_current_hour:
-                    current_snapshot = {**weather, "timestamp": datetime.now(timezone.utc).isoformat(), "hour_id": current_hour_id}
-                    history.insert(0, current_snapshot)
+            # Evaluate risk and trigger alerts
+            history = get_weather_history(normalize_location(name), hours=24)
+            current_hour_id = datetime.now(timezone.utc).strftime("%Y%m%d%H")
+            
+            # Ensure the latest reading is included in risk calculation
+            if not any(h.get('hour_id') == current_hour_id for h in history):
+                current_snapshot = {**weather, "timestamp": datetime.now(timezone.utc).isoformat(), "hour_id": current_hour_id}
+                history.insert(0, current_snapshot)
             
             risk_result = risk_engine.evaluate_risk(history)
-            check_and_trigger_alerts(place, risk_result)
+            check_and_trigger_alerts(name, risk_result)
+            
+            # Slight delay to be kind to the API
+            time.sleep(0.5)
             
         except Exception as e:
-            print(f"Failed to ingest {place}: {e}")
+            print(f"Failed to update {place.get('name')}: {e}")
             
-    print("Ingestion complete.")
+    print(f"--- [SCHEDULER] Global Ingestion Complete: {datetime.now()} ---\n")
     return "OK"
 
 
 
+def run_scheduler():
+    """Background loop to update all weather data every 30 minutes."""
+    # Wait for server to potentially start up first
+    time.sleep(10)
+    while True:
+        try:
+            ingest_weather()
+        except Exception as e:
+            print(f"Scheduler Error: {e}")
+        
+        # Sleep for 30 minutes (1800 seconds)
+        time.sleep(1800)
+
 if __name__ == "__main__":
     import uvicorn
+    
+    # Start the background scheduler thread
+    scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
+    scheduler_thread.start()
+    
     print("Starting server on 0.0.0.0:8080...")
     uvicorn.run(app, host="0.0.0.0", port=8080)
