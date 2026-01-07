@@ -9,29 +9,49 @@ import threading
 import time
 import risk_engine
 import notifier
+import tempfile
 
 app = FastAPI(title="Disaster Alert System")
 
-# Add CORS middleware
+# Configure CORS with environment variable support
+ALLOWED_ORIGINS = os.getenv(
+    "ALLOWED_ORIGINS", 
+    "http://localhost:3000,http://127.0.0.1:3000"
+).split(",")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Initialize Firestore
-# Note: Ensure GOOGLE_APPLICATION_CREDENTIALS is set or you are logged in via gcloud
-try:
-    # Based on your image, your database ID is 'weather'
-    db = firestore.Client(database='weather')
-    # verify if we can actually access the database
-    collections = list(db.collections(timeout=5))
-    print("Firestore ('weather' database) initialized successfully.")
-except Exception as e:
-    print(f"Firestore 'weather' database not available: {e}. Running in Local Mode.")
-    db = None
+# Initialize Firestore with support for JSON credentials from environment
+def init_firestore():
+    """Initialize Firestore client with support for credential JSON in env var."""
+    try:
+        # Check if credentials are provided as JSON string (for Render/cloud deployment)
+        creds_json = os.getenv('GOOGLE_CREDENTIALS_JSON')
+        if creds_json:
+            # Write credentials to a temporary file
+            with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.json') as f:
+                f.write(creds_json)
+                temp_creds_path = f.name
+            os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = temp_creds_path
+            print("Using credentials from GOOGLE_CREDENTIALS_JSON environment variable")
+        
+        # Initialize Firestore client
+        db = firestore.Client(database='weather')
+        # Verify database access
+        collections = list(db.collections(timeout=5))
+        print("Firestore ('weather' database) initialized successfully.")
+        return db
+    except Exception as e:
+        print(f"Firestore 'weather' database not available: {e}. Running in Local Mode.")
+        return None
+
+db = init_firestore()
 
 
 def normalize_location(location: str) -> str:
@@ -117,6 +137,16 @@ def get_weather_history(location: str, hours: int = 24):
         print(f"Error fetching history: {e}")
         return []
 
+
+@app.get("/health")
+def health_check():
+    """Health check endpoint for monitoring and deployment verification."""
+    return {
+        "status": "healthy",
+        "service": "Disaster Alert System",
+        "firestore_connected": db is not None,
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }
 
 def get_coordinates(location: str):
     """Convert location name to lat/long using Open-Meteo Geocoding API."""

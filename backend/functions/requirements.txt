@@ -1,7 +1,18 @@
-fastapi
-uvicorn
-requests
-google-cloud-firestore
-functions-framework
-python-dotenv
-sendgrid
+# FastAPI Framework
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+
+# HTTP Requests
+requests>=2.31.0
+
+# Google Cloud
+google-cloud-firestore>=2.13.0
+
+# Email Service
+sendgrid>=6.10.0
+
+# Environment Variables
+python-dotenv>=1.0.0
+
+# Google Cloud Functions (optional, for GCP deployment)
+functions-framework>=3.5.0
