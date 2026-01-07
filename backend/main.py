@@ -91,9 +91,9 @@ def save_weather_data(location: str, weather_data: dict, coordinates: tuple = (N
 
         print(f"Hourly record ({hour_id}) updated for {location}")
         
-        # 3. Cleanup: Maintain a Rolling Cache (Delete records older than 48 hours)
-        # This prevents the database from growing indefinitely.
-        cleanup_cutoff = timestamp - timedelta(hours=48)
+        # 3. Cleanup: Maintain a Rolling Cache (Delete records older than 24 hours)
+        # This keeps only the most recent day's data for dashboard charts
+        cleanup_cutoff = timestamp - timedelta(hours=24)
         old_docs = doc_ref.collection('history').where('timestamp', '<', cleanup_cutoff).stream()
         
         deleted_count = 0
@@ -138,7 +138,7 @@ def get_weather_history(location: str, hours: int = 24):
         return []
 
 
-@app.get("/health")
+@app.get("/")
 def health_check():
     """Health check endpoint for monitoring and deployment verification."""
     return {
