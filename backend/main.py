@@ -1,7 +1,8 @@
-from fastapi import FastAPI, Query, HTTPException
+from fastapi import FastAPI, Query, HTTPException, Body
 from fastapi.middleware.cors import CORSMiddleware
 from google.cloud import firestore
 from datetime import datetime, timezone, timedelta
+from pydantic import BaseModel, EmailStr
 import requests
 import json
 import os
@@ -198,6 +199,145 @@ def health_check():
         "timestamp": datetime.now(timezone.utc).isoformat()
     }
 
+@app.post("/users/register")
+async def register_user(user: UserRegistration):
+    """Register a new user for disaster notifications."""
+    if not db:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    
+    try:
+        normalized_location = normalize_location(user.location)
+        
+        # Check if user already exists
+        existing_users = db.collection('users').where('email', '==', user.email).limit(1).stream()
+        if any(existing_users):
+            raise HTTPException(status_code=400, detail="User with this email already registered")
+        
+        # Create user document
+        user_data = {
+            "name": user.name,
+            "email": user.email,
+            "phone": user.phone,
+            "location": user.location,
+            "location_normalized": normalized_location,
+            "notify_disasters": user.notify_disasters,
+            "created_at": datetime.now(timezone.utc),
+            "updated_at": datetime.now(timezone.utc)
+        }
+        
+        # Add to Firestore
+        doc_ref = db.collection('users').document()
+        doc_ref.set(user_data)
+        
+        print(f"New user registered: {user.email} from {user.location}")
+        
+        return {
+            "status": "success",
+            "message": "User registered successfully for disaster notifications",
+            "user_id": doc_ref.id,
+            "location": user.location
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error registering user: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to register user: {str(e)}")
+
+@app.get("/users/{email}")
+async def get_user(email: str):
+    """Get user information by email."""
+    if not db:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    
+    try:
+        users_query = db.collection('users').where('email', '==', email).limit(1).stream()
+        for user_doc in users_query:
+            user_data = user_doc.to_dict()
+            user_data['user_id'] = user_doc.id
+            return {
+                "status": "success",
+                "user": user_data
+            }
+        
+        raise HTTPException(status_code=404, detail="User not found")
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error fetching user: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch user: {str(e)}")
+
+@app.put("/users/{email}")
+async def update_user(email: str, user: UserRegistration):
+    """Update user notification preferences."""
+    if not db:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    
+    try:
+        users_query = db.collection('users').where('email', '==', email).limit(1).stream()
+        user_doc = None
+        for doc in users_query:
+            user_doc = doc
+            break
+        
+        if not user_doc:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        normalized_location = normalize_location(user.location)
+        
+        # Update user document
+        user_data = {
+            "name": user.name,
+            "phone": user.phone,
+            "location": user.location,
+            "location_normalized": normalized_location,
+            "notify_disasters": user.notify_disasters,
+            "updated_at": datetime.now(timezone.utc)
+        }
+        
+        user_doc.reference.update(user_data)
+        
+        print(f"User updated: {email}")
+        
+        return {
+            "status": "success",
+            "message": "User information updated successfully"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error updating user: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to update user: {str(e)}")
+
+@app.delete("/users/{email}")
+async def delete_user(email: str):
+    """Unsubscribe user from disaster notifications."""
+    if not db:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    
+    try:
+        users_query = db.collection('users').where('email', '==', email).limit(1).stream()
+        user_doc = None
+        for doc in users_query:
+            user_doc = doc
+            break
+        
+        if not user_doc:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        user_doc.reference.delete()
+        
+        print(f"User deleted: {email}")
+        
+        return {
+            "status": "success",
+            "message": "User unsubscribed successfully"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error deleting user: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete user: {str(e)}")
+
 def get_coordinates(location: str):
     """Convert location name to lat/long using Open-Meteo Geocoding API."""
     url = f"https://geocoding-api.open-meteo.com/v1/search?name={location}&count=1&language=en&format=json"
@@ -221,6 +361,14 @@ def get_mock_data(scenario_name):
 
 from fastapi import BackgroundTasks
 
+# Pydantic model for user registration
+class UserRegistration(BaseModel):
+    name: str
+    email: EmailStr
+    phone: str
+    location: str
+    notify_disasters: bool = True
+
 # Configurable list of places to monitor
 MONITORED_PLACES = ["Mumbai", "Delhi", "Chennai", "Kolkata", "Bangalore", "Hyderabad", "Pune", "Ahmedabad"]
 LAST_BG_INGEST = datetime.min.replace(tzinfo=timezone.utc) # Cooldown tracker
@@ -228,40 +376,45 @@ LAST_BG_INGEST = datetime.min.replace(tzinfo=timezone.utc) # Cooldown tracker
 def check_and_trigger_alerts(loc_name, risk_res, background_tasks=None):
     """
     Checks if risk is high and sends email alerts to users in the affected location.
-    If background_tasks is provided, it uses FastAPI's background tasks.
-    Otherwise, it sends emails synchronously (suitable for background jobs).
+    Queries users from Firestore database who opted in for notifications.
     """
     if risk_res.get('risk_level') == "HIGH":
         print(f"HIGH RISK detected for {loc_name}. Triggering alerts...")
         try:
-            base_path = os.path.dirname(os.path.abspath(__file__))
-            users_path = os.path.join(base_path, 'mock_data', 'users.json')
-            if not os.path.exists(users_path):
-                print(f"User data file not found at {users_path}")
+            if not db:
+                print("Firestore not available, cannot send alerts")
                 return
-
-            with open(users_path, 'r') as f:
-                users_data = json.load(f)
-                matching_users = [u for u in users_data.get('users', []) if u.get('home_location') == normalize_location(loc_name)]
-                
-                print(f"Found {len(matching_users)} users in {loc_name}. Sending alerts...")
-                
-                for user in matching_users:
-                    if background_tasks:
-                        background_tasks.add_task(
-                            notifier.send_high_risk_alert,
-                            user['email'],
-                            user['name'],
-                            loc_name,
-                            risk_res
-                        )
-                    else:
-                        notifier.send_high_risk_alert(
-                            user['email'],
-                            user['name'],
-                            loc_name,
-                            risk_res
-                        )
+            
+            # Query users from Firestore who are in the affected location and want notifications
+            normalized_location = normalize_location(loc_name)
+            users_query = db.collection('users') \
+                .where('location_normalized', '==', normalized_location) \
+                .where('notify_disasters', '==', True) \
+                .stream()
+            
+            matching_users = []
+            for user_doc in users_query:
+                user_data = user_doc.to_dict()
+                matching_users.append(user_data)
+            
+            print(f"Found {len(matching_users)} users in {loc_name}. Sending alerts...")
+            
+            for user in matching_users:
+                if background_tasks:
+                    background_tasks.add_task(
+                        notifier.send_high_risk_alert,
+                        user.get('email'),
+                        user.get('name'),
+                        loc_name,
+                        risk_res
+                    )
+                else:
+                    notifier.send_high_risk_alert(
+                        user.get('email'),
+                        user.get('name'),
+                        loc_name,
+                        risk_res
+                    )
         except Exception as alert_err:
             print(f"Error triggering alerts for {loc_name}: {alert_err}")
 
