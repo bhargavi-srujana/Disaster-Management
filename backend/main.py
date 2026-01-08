@@ -139,6 +139,7 @@ def get_weather_history(location: str, hours: int = 24):
 
 
 @app.get("/")
+@app.head("/")
 def health_check():
     """Health check endpoint for monitoring and deployment verification."""
     return {
