@@ -110,6 +110,55 @@ def save_weather_data(location: str, weather_data: dict, coordinates: tuple = (N
         return False
 
 
+def populate_historical_data(location: str, hourly_data: dict, coordinates: tuple = (None, None)):
+    """Populates database with historical hourly data for new locations."""
+    if not db:
+        return False
+    
+    try:
+        print(f"Populating historical data for new location: {location}")
+        doc_ref = db.collection('places').document(location)
+        
+        # Extract arrays from hourly data
+        times = hourly_data.get('time', [])
+        temps = hourly_data.get('temperature_2m', [])
+        humidity = hourly_data.get('relative_humidity_2m', [])
+        rain = hourly_data.get('rain', [])
+        wind = hourly_data.get('wind_speed_10m', [])
+        clouds = hourly_data.get('cloud_cover', [])
+        
+        # Process each hour's data
+        saved_count = 0
+        for i in range(len(times)):
+            try:
+                timestamp = datetime.fromisoformat(times[i].replace('Z', '+00:00'))
+                hour_id = timestamp.strftime("%Y%m%d%H")
+                
+                history_data = {
+                    "temp": temps[i] if i < len(temps) else 0,
+                    "humidity": humidity[i] if i < len(humidity) else 0,
+                    "rain_1h": rain[i] if i < len(rain) else 0,
+                    "wind_speed": wind[i] if i < len(wind) else 0,
+                    "clouds": clouds[i] if i < len(clouds) else 0,
+                    "location": location,
+                    "timestamp": timestamp,
+                    "hour_id": hour_id
+                }
+                
+                history_ref = doc_ref.collection('history').document(hour_id)
+                history_ref.set(history_data, merge=True)
+                saved_count += 1
+            except Exception as e:
+                print(f"Error saving hourly record {i}: {e}")
+                continue
+        
+        print(f"Saved {saved_count} historical records for {location}")
+        return True
+    except Exception as e:
+        print(f"Error populating historical data: {e}")
+        return False
+
+
 def get_weather_history(location: str, hours: int = 24):
     """Retrieves recent weather observations for persistence analysis."""
     if not db:
@@ -281,10 +330,21 @@ async def get_weather_risk(
             if lat is None:
                 raise HTTPException(status_code=404, detail=f"Location '{original_name}' not found")
 
-        weather_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,relative_humidity_2m,rain,wind_speed_10m,cloud_cover"
-        resp = requests.get(weather_url, timeout=5)
+        # Check if this is a new location (no history in database)
+        is_new_location = False
+        if db:
+            doc_ref = db.collection('places').document(location)
+            doc = doc_ref.get()
+            if not doc.exists:
+                is_new_location = True
+                print(f"New location detected: {location}. Will fetch historical data.")
+        
+        # Fetch current + hourly data (Open-Meteo includes past 24hrs by default)
+        weather_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,relative_humidity_2m,rain,wind_speed_10m,cloud_cover&hourly=temperature_2m,relative_humidity_2m,rain,wind_speed_10m,cloud_cover&past_hours=24"
+        resp = requests.get(weather_url, timeout=10)
         resp.raise_for_status()
-        api_data = resp.json()['current']
+        api_response = resp.json()
+        api_data = api_response['current']
 
         weather_data = {
             "temp": api_data['temperature_2m'],
@@ -295,7 +355,11 @@ async def get_weather_risk(
             "location": location
         }
         
-        # Move database saving to background to speed up response
+        # If new location, populate historical data from API response
+        if is_new_location and 'hourly' in api_response:
+            background_tasks.add_task(populate_historical_data, location, api_response['hourly'], (lat, lon))
+        
+        # Save current weather data
         background_tasks.add_task(save_weather_data, location, weather_data, (lat, lon))
         source = "live_api"
 
