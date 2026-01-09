@@ -578,6 +578,12 @@ async def manual_refresh(background_tasks: BackgroundTasks):
     background_tasks.add_task(ingest_weather)
     return {"message": "Global weather refresh started in background", "monitored_places": MONITORED_PLACES}
 
+@app.head("/refresh")
+async def manual_refresh_head(background_tasks: BackgroundTasks):
+    """HEAD request support for UptimeRobot - triggers refresh without returning body."""
+    background_tasks.add_task(ingest_weather)
+    return {}
+
 
 
 def ingest_weather(event=None, context=None):
