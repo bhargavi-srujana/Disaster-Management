@@ -508,9 +508,11 @@ async def get_weather_risk(
             "location": location
         }
         
-        # If new location, populate historical data from API response
+        # If new location, populate historical data immediately (not in background)
+        # so it's available for risk assessment in this response
         if is_new_location and 'hourly' in api_response:
-            background_tasks.add_task(populate_historical_data, location, api_response['hourly'], (lat, lon))
+            print(f"Populating historical data immediately for {location}")
+            populate_historical_data(location, api_response['hourly'], (lat, lon))
         
         # Save current weather data
         background_tasks.add_task(save_weather_data, location, weather_data, (lat, lon))

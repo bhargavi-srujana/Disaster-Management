@@ -19,7 +19,8 @@ export default function UserRegistration({ onClose }) {
     setError('');
 
     try {
-      const response = await fetch('http://localhost:8080/users/register', {
+      const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:8080';
+      const response = await fetch(`${API_URL}/users/register`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -33,11 +34,13 @@ export default function UserRegistration({ onClose }) {
         throw new Error(data.detail || 'Registration failed');
       }
 
+      console.log('User registered successfully:', data);
       setSuccess(true);
       setTimeout(() => {
         if (onClose) onClose();
       }, 2000);
     } catch (err) {
+      console.error('Registration error:', err);
       setError(err.message);
     } finally {
       setLoading(false);
@@ -169,7 +172,7 @@ export default function UserRegistration({ onClose }) {
               <p className="text-sm text-red-600">{error}</p>
             </div>
           )}
-
+-
           {/* Submit Button */}
           <button
             type="submit"
