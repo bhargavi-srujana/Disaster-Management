@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Query, HTTPException, Body
+from fastapi import FastAPI, Query, HTTPException, Body, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from google.cloud import firestore
 from datetime import datetime, timezone, timedelta
@@ -53,6 +53,14 @@ def init_firestore():
         return None
 
 db = init_firestore()
+
+# Pydantic model for user registration
+class UserRegistration(BaseModel):
+    name: str
+    email: EmailStr
+    phone: str
+    location: str
+    notify_disasters: bool = True
 
 
 def normalize_location(location: str) -> str:
@@ -358,16 +366,6 @@ def get_mock_data(scenario_name):
             return data['readings'][0]
     except FileNotFoundError:
         return None
-
-from fastapi import BackgroundTasks
-
-# Pydantic model for user registration
-class UserRegistration(BaseModel):
-    name: str
-    email: EmailStr
-    phone: str
-    location: str
-    notify_disasters: bool = True
 
 # Configurable list of places to monitor
 MONITORED_PLACES = ["Mumbai", "Delhi", "Chennai", "Kolkata", "Bangalore", "Hyderabad", "Pune", "Ahmedabad"]
