@@ -68,7 +68,7 @@ def normalize_location(location: str) -> str:
     return location.strip().lower().replace(" ", "_")
 
 
-def save_weather_data(location: str, weather_data: dict, coordinates: tuple = (None, None)):
+def save_weather_data(location: str, weather_data: dict, coordinates: tuple = (None, None), risk_result: dict = None):
     """Saves weather snapshot to Firestore history and updates latest cache."""
     if not db:
         return False
@@ -87,6 +87,19 @@ def save_weather_data(location: str, weather_data: dict, coordinates: tuple = (N
         }
         if coordinates[0] is not None:
             update_payload['coordinates'] = {'lat': coordinates[0], 'lon': coordinates[1]}
+        
+        # Cache risk assessment to avoid unnecessary history reads
+        if risk_result:
+            update_payload['risk_cache'] = {
+                'risk_level': risk_result.get('risk_level'),
+                'risk_score': risk_result.get('risk_score'),
+                'calculated_at': timestamp,
+                'conditions_snapshot': {
+                    'temp': weather_data.get('temp'),
+                    'rain': weather_data.get('rain_1h'),
+                    'wind': weather_data.get('wind_speed')
+                }
+            }
         
         doc_ref.set(update_payload, merge=True)
 
@@ -345,6 +358,42 @@ async def delete_user(email: str):
     except Exception as e:
         print(f"Error deleting user: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to delete user: {str(e)}")
+
+def should_recalculate_risk(current_weather: dict, cached_risk: dict) -> bool:
+    """Determine if risk needs recalculation or can use cached result."""
+    if not cached_risk:
+        return True
+    
+    # Check cache age - recalculate if older than 1 hour
+    try:
+        cache_age = datetime.now(timezone.utc) - datetime.fromisoformat(cached_risk.get('calculated_at', ''))
+        if cache_age > timedelta(hours=1):
+            return True
+    except:
+        return True
+    
+    # If conditions are clearly safe and haven't changed much, use cache
+    cached_conditions = cached_risk.get('conditions_snapshot', {})
+    temp = current_weather.get('temp', 25)
+    rain = current_weather.get('rain_1h', 0)
+    wind = current_weather.get('wind_speed', 0)
+    
+    cached_temp = cached_conditions.get('temp', temp)
+    cached_rain = cached_conditions.get('rain', rain)
+    cached_wind = cached_conditions.get('wind', wind)
+    
+    # Safe conditions: moderate temp, low rain, low wind, and not much change
+    is_safe = (15 <= temp <= 35 and rain < 10 and wind < 40)
+    temp_stable = abs(temp - cached_temp) < 5
+    rain_stable = abs(rain - cached_rain) < 5
+    wind_stable = abs(wind - cached_wind) < 10
+    
+    # If safe and stable, use cached risk (avoids history read)
+    if is_safe and temp_stable and rain_stable and wind_stable:
+        return False
+    
+    # Otherwise, recalculate
+    return True
 
 def get_coordinates(location: str):
     """Convert location name to lat/long using Open-Meteo Geocoding API."""
@@ -653,18 +702,62 @@ def ingest_weather(event=None, context=None):
                 "location": normalize_location(name)
             }
             
-            save_weather_data(normalize_location(name), weather, (lat, lon))
+            normalized_name = normalize_location(name)
             
-            # Evaluate risk and trigger alerts
-            history = get_weather_history(normalize_location(name), hours=24)
-            current_hour_id = datetime.now(timezone.utc).strftime("%Y%m%d%H")
+            # Smart risk assessment with caching
+            risk_result = None
+            cached_risk = None
             
-            # Ensure the latest reading is included in risk calculation
-            if not any(h.get('hour_id') == current_hour_id for h in history):
-                current_snapshot = {**weather, "timestamp": datetime.now(timezone.utc).isoformat(), "hour_id": current_hour_id}
-                history.insert(0, current_snapshot)
+            # Try to get cached risk from main document
+            if db:
+                try:
+                    doc_ref = db.collection('places').document(normalized_name)
+                    doc = doc_ref.get()
+                    if doc.exists:
+                        cached_risk = doc.to_dict().get('risk_cache')
+                except Exception as e:
+                    print(f"Error reading cached risk for {name}: {e}")
             
-            risk_result = risk_engine.evaluate_risk(history)
+            # Check if we need to recalculate risk
+            if should_recalculate_risk(weather, cached_risk):
+                # Need fresh calculation - read history (progressive reading)
+                # Start with last 6 hours for quick check
+                history = get_weather_history(normalized_name, hours=6)
+                current_hour_id = datetime.now(timezone.utc).strftime("%Y%m%d%H")
+                
+                # Ensure latest reading is included
+                if not any(h.get('hour_id') == current_hour_id for h in history):
+                    current_snapshot = {**weather, "timestamp": datetime.now(timezone.utc).isoformat(), "hour_id": current_hour_id}
+                    history.insert(0, current_snapshot)
+                
+                # Quick risk assessment
+                quick_risk = risk_engine.evaluate_risk(history)
+                
+                # If concerning, read full 24 hours for detailed analysis
+                if quick_risk.get('risk_level') in ['MEDIUM', 'HIGH']:
+                    print(f"{name}: {quick_risk.get('risk_level')} risk detected, reading full history")
+                    history = get_weather_history(normalized_name, hours=24)
+                    if not any(h.get('hour_id') == current_hour_id for h in history):
+                        history.insert(0, current_snapshot)
+                    risk_result = risk_engine.evaluate_risk(history)
+                else:
+                    risk_result = quick_risk
+                
+                print(f"{name}: Risk calculated - {risk_result.get('risk_level')}")
+            else:
+                # Use cached risk (0 history reads!)
+                risk_result = {
+                    'risk_level': cached_risk.get('risk_level'),
+                    'risk_score': cached_risk.get('risk_score'),
+                    'factors': ['Using cached risk assessment'],
+                    'recommendations': []
+                }
+                print(f"{name}: Using cached risk - {risk_result.get('risk_level')}")
+            
+            # Save with risk cache
+            save_weather_data(normalized_name, weather, (lat, lon), risk_result)
+            
+            # Trigger alerts if needed
             check_and_trigger_alerts(name, risk_result)
             
             # Slight delay to be kind to the API
@@ -679,7 +772,7 @@ def ingest_weather(event=None, context=None):
 
 
 def run_scheduler():
-    """Background loop to update all weather data every 30 minutes."""
+    """Background loop to update all weather data every 60 minutes."""
     # Wait for server to potentially start up first
     time.sleep(10)
     while True:
@@ -688,8 +781,8 @@ def run_scheduler():
         except Exception as e:
             print(f"Scheduler Error: {e}")
         
-        # Sleep for 30 minutes (1800 seconds)
-        time.sleep(1800)
+        # Sleep for 60 minutes (3600 seconds)
+        time.sleep(3600)
 
 if __name__ == "__main__":
     import uvicorn
