@@ -18,6 +18,7 @@ sendgrid.env
 !package-lock.json
 !jsconfig.json
 !tsconfig.json
+!vercel.json
 
 # IDE
 .vscode/
