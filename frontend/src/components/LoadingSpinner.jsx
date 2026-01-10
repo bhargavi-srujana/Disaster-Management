@@ -38,5 +38,3 @@ const LoadingSpinner = ({ message = 'Checking conditions...' }) => {
 };
 
 export default LoadingSpinner;
-
-export default LoadingSpinner;
