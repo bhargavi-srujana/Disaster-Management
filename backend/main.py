@@ -395,6 +395,29 @@ def should_recalculate_risk(current_weather: dict, cached_risk: dict) -> bool:
     # Otherwise, recalculate
     return True
 
+def format_hourly_trends(hourly_data: dict) -> list:
+    """Format hourly API data into readable trend format."""
+    if not hourly_data or 'time' not in hourly_data:
+        return []
+    
+    times = hourly_data.get('time', [])
+    temps = hourly_data.get('temperature_2m', [])
+    humidity = hourly_data.get('relative_humidity_2m', [])
+    rain = hourly_data.get('rain', [])
+    wind = hourly_data.get('wind_speed_10m', [])
+    
+    trends = []
+    for i in range(len(times)):
+        trends.append({
+            'time': times[i],
+            'temp': temps[i] if i < len(temps) else None,
+            'humidity': humidity[i] if i < len(humidity) else None,
+            'rain': rain[i] if i < len(rain) else None,
+            'wind': wind[i] if i < len(wind) else None
+        })
+    
+    return trends
+
 def get_coordinates(location: str):
     """Convert location name to lat/long using Open-Meteo Geocoding API."""
     url = f"https://geocoding-api.open-meteo.com/v1/search?name={location}&count=1&language=en&format=json"
@@ -539,6 +562,7 @@ async def get_weather_risk(
         resp.raise_for_status()
         api_response = resp.json()
         api_data = api_response['current']
+        hourly_data = api_response.get('hourly', {})  # 24-hour data from API
 
         weather_data = {
             "temp": api_data['temperature_2m'],
@@ -553,13 +577,18 @@ async def get_weather_risk(
         background_tasks.add_task(save_weather_data, location, weather_data, (lat, lon))
         source = "live_api"
         print(f"Live API data retrieved for {location}")
+        
+        # Store hourly data for trends view
+        api_hourly_trends = format_hourly_trends(hourly_data) if hourly_data else []
 
     except Exception as e:
         print(f"API Fetch Failed for {location}: {e}")
         api_error = str(e)
+        api_hourly_trends = []  # No hourly data if API fails
 
     # 3. Fallback to Database Cache if API failed
     if not weather_data:
+        api_hourly_trends = []  # No API trends available
         if db:
             doc_ref = db.collection('places').document(location)
             doc = doc_ref.get()
@@ -607,7 +636,9 @@ async def get_weather_risk(
         "data": weather_data,
         "risk_assessment": risk_result,
         "history_count": len(history),
-        "history": history  # Include actual historical data for charts
+        "history": history,  # DB history for extended trends (if available)
+        "hourly_trends": api_hourly_trends,  # 24-hour trends from API (always fresh)
+        "has_extended_history": len(history) > 48  # Flag for UI to show extended trends option
     }
 
 @app.get("/refresh")
