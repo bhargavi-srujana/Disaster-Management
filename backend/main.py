@@ -17,7 +17,7 @@ app = FastAPI(title="Disaster Alert System")
 # Configure CORS with environment variable support
 ALLOWED_ORIGINS = os.getenv(
     "ALLOWED_ORIGINS", 
-    "http://localhost:3000,http://127.0.0.1:3000"
+    "http://localhost:3000,http://127.0.0.1:3000,https://disaster-management-67yd.vercel.app"
 ).split(",")
 
 app.add_middleware(
