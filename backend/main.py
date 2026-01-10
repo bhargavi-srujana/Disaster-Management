@@ -418,6 +418,44 @@ def format_hourly_trends(hourly_data: dict) -> list:
     
     return trends
 
+
+def extract_forecast(hourly_data: dict) -> list:
+    """Extracts next 48 hours of forecast data from Open-Meteo hourly response."""
+    if not hourly_data or 'time' not in hourly_data:
+        return []
+    
+    times = hourly_data.get('time', [])
+    temps = hourly_data.get('temperature_2m', [])
+    humidity = hourly_data.get('relative_humidity_2m', [])
+    rain = hourly_data.get('rain', [])
+    wind = hourly_data.get('wind_speed_10m', [])
+    weather_codes = hourly_data.get('weather_code', [])
+    
+    # Find current time index (API returns past + future)
+    now = datetime.now(timezone.utc)
+    forecast = []
+    
+    for i in range(len(times)):
+        time_str = times[i]
+        try:
+            hour_time = datetime.fromisoformat(time_str.replace('Z', '+00:00'))
+        except:
+            continue
+        
+        # Only include future hours (next 48 hours)
+        if hour_time > now and len(forecast) < 48:
+            forecast.append({
+                'time': time_str,
+                'temp': temps[i] if i < len(temps) else None,
+                'humidity': humidity[i] if i < len(humidity) else None,
+                'rain': rain[i] if i < len(rain) else 0,
+                'wind': wind[i] if i < len(wind) else None,
+                'weather_code': weather_codes[i] if i < len(weather_codes) else 0
+            })
+    
+    return forecast
+
+
 def get_coordinates(location: str):
     """Convert location name to lat/long using Open-Meteo Geocoding API."""
     url = f"https://geocoding-api.open-meteo.com/v1/search?name={location}&count=1&language=en&format=json"
@@ -556,8 +594,8 @@ async def get_weather_risk(
         # ALWAYS fetch fresh data from API (DB is fallback only)
         print(f"Fetching live weather from API for {location}")
         
-        # Fetch current + hourly data (Open-Meteo includes past 24hrs by default)
-        weather_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,relative_humidity_2m,rain,wind_speed_10m,cloud_cover&hourly=temperature_2m,relative_humidity_2m,rain,wind_speed_10m,cloud_cover&past_hours=24"
+        # Fetch current + hourly data (past 24hrs + future 48hrs forecast)
+        weather_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,relative_humidity_2m,rain,wind_speed_10m,cloud_cover&hourly=temperature_2m,relative_humidity_2m,rain,wind_speed_10m,cloud_cover,weather_code&past_hours=24&forecast_hours=48&timezone=auto"
         resp = requests.get(weather_url, timeout=10)
         resp.raise_for_status()
         api_response = resp.json()
@@ -578,17 +616,22 @@ async def get_weather_risk(
         source = "live_api"
         print(f"Live API data retrieved for {location}")
         
-        # Store hourly data for trends view
+        # Store hourly data for trends view (past 24hrs)
         api_hourly_trends = format_hourly_trends(hourly_data) if hourly_data else []
+        
+        # Extract forecast data (next 48 hours)
+        forecast_data = extract_forecast(hourly_data) if hourly_data else []
 
     except Exception as e:
         print(f"API Fetch Failed for {location}: {e}")
         api_error = str(e)
         api_hourly_trends = []  # No hourly data if API fails
+        forecast_data = []  # No forecast if API fails
 
     # 3. Fallback to Database Cache if API failed
     if not weather_data:
         api_hourly_trends = []  # No API trends available
+        forecast_data = []  # No forecast available
         if db:
             doc_ref = db.collection('places').document(location)
             doc = doc_ref.get()
@@ -638,6 +681,7 @@ async def get_weather_risk(
         "history_count": len(history),
         "history": history,  # DB history for extended trends (if available)
         "hourly_trends": api_hourly_trends,  # 24-hour trends from API (always fresh)
+        "forecast": forecast_data,  # 48-hour forecast
         "has_extended_history": len(history) > 48  # Flag for UI to show extended trends option
     }
 

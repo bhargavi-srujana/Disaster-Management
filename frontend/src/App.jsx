@@ -6,6 +6,8 @@ import SimpleLocationChanger from './components/SimpleLocationChanger';
 import BigAlertButton from './components/BigAlertButton';
 import UserRegistration from './components/UserRegistration';
 import TrendsModal from './components/TrendsModal';
+import ForecastPanel from './components/ForecastPanel';
+import LoadingSpinner from './components/LoadingSpinner';
 import { getWeatherRisk } from './services/api';
 
 function App() {
@@ -14,6 +16,7 @@ function App() {
   const [riskAssessment, setRiskAssessment] = useState(null);
   const [historyData, setHistoryData] = useState([]);
   const [hourlyTrends, setHourlyTrends] = useState([]);
+  const [forecast, setForecast] = useState([]);
   const [hasExtendedHistory, setHasExtendedHistory] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -27,8 +30,11 @@ function App() {
   // Get user's location on first load
   useEffect(() => {
     if (!locationDetected && 'geolocation' in navigator) {
+      console.log('Requesting geolocation...');
+      
       navigator.geolocation.getCurrentPosition(
         async (position) => {
+          console.log('Geolocation success:', position.coords);
           const { latitude, longitude } = position.coords;
           
           // Store coordinates for fallback
@@ -39,11 +45,28 @@ function App() {
           
           // Try 1: BigDataCloud (usually best for cities)
           try {
+            console.log('Trying BigDataCloud geocoding...');
             const response = await fetch(
-              `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${latitude}&longitude=${longitude}&localityLanguage=en`
+              `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${latitude}&longitude=${longitude}&localityLanguage=en`,
+              { 
+                method: 'GET',
+                headers: {
+                  'Accept': 'application/json'
+                }
+              }
             );
+            
+            if (!response.ok) {
+              throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            
             const data = await response.json();
+            console.log('BigDataCloud response:', data);
             city = data.city || data.locality || data.principalSubdivision;
+            
+            if (city) {
+              console.log('City found from BigDataCloud:', city);
+            }
           } catch (err) {
             console.log('BigDataCloud failed:', err);
           }
@@ -51,34 +74,99 @@ function App() {
           // Try 2: If no city, try geocode.xyz
           if (!city) {
             try {
+              console.log('Trying geocode.xyz...');
+              await new Promise(resolve => setTimeout(resolve, 1000)); // Rate limit delay
+              
               const response = await fetch(
-                `https://geocode.xyz/${latitude},${longitude}?json=1`
+                `https://geocode.xyz/${latitude},${longitude}?json=1`,
+                {
+                  method: 'GET',
+                  headers: {
+                    'Accept': 'application/json'
+                  }
+                }
               );
+              
+              if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+              }
+              
               const data = await response.json();
+              console.log('Geocode.xyz response:', data);
               city = data.city || data.region;
+              
+              if (city) {
+                console.log('City found from geocode.xyz:', city);
+              }
             } catch (err) {
               console.log('Geocode.xyz failed:', err);
             }
           }
           
+          // Try 3: If still no city, try OpenStreetMap Nominatim
+          if (!city) {
+            try {
+              console.log('Trying OpenStreetMap Nominatim...');
+              await new Promise(resolve => setTimeout(resolve, 1000)); // Rate limit delay
+              
+              const response = await fetch(
+                `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}&zoom=10`,
+                {
+                  method: 'GET',
+                  headers: {
+                    'Accept': 'application/json',
+                    'User-Agent': 'WeatherSafetyCheck/1.0'
+                  }
+                }
+              );
+              
+              if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+              }
+              
+              const data = await response.json();
+              console.log('Nominatim response:', data);
+              
+              // Try different location fields in order of preference
+              city = data.address?.city || 
+                     data.address?.town || 
+                     data.address?.village || 
+                     data.address?.municipality ||
+                     data.address?.county ||
+                     data.address?.state;
+              
+              if (city) {
+                console.log('City found from Nominatim:', city);
+              }
+            } catch (err) {
+              console.log('Nominatim failed:', err);
+            }
+          }
+          
           if (city) {
+            console.log('Setting location to:', city);
             setSelectedLocation(city);
             setLocationDetected(true);
           } else {
             // No city name found from any service, show welcome screen
-            console.log('Could not determine city name from coordinates');
+            console.log('Could not determine city name from any geocoding service');
             setLocationDetected(true);
           }
         },
         (error) => {
           // Geolocation denied or failed, don't set default location
-          console.log('Geolocation not available:', error.message);
+          console.log('Geolocation error:', error.code, error.message);
           setLocationDetected(true);
         },
-        { timeout: 10000 }
+        { 
+          enableHighAccuracy: false, // Edge might have issues with high accuracy
+          timeout: 15000, // Increase timeout for Edge
+          maximumAge: 0 
+        }
       );
     } else if (!locationDetected) {
       // Geolocation not supported, don't set default
+      console.log('Geolocation not supported in this browser');
       setLocationDetected(true);
     }
   }, [locationDetected]);
@@ -93,6 +181,7 @@ function App() {
       setRiskAssessment(data.risk_assessment);
       setHistoryData(data.history || []);
       setHourlyTrends(data.hourly_trends || []);
+      setForecast(data.forecast || []);
       setHasExtendedHistory(data.has_extended_history || false);
       setLastUpdated(new Date());
       
@@ -120,6 +209,24 @@ function App() {
   // Handle location change
   const handleLocationChange = (location) => {
     setSelectedLocation(location);
+  };
+
+  // Share functionality
+  const handleShare = () => {
+    const shareText = `Check weather safety in ${selectedLocation}: ${window.location.href}`;
+    
+    if (navigator.share) {
+      navigator.share({
+        title: 'Weather Safety Check',
+        text: shareText,
+        url: window.location.href
+      }).catch(err => console.log('Share cancelled'));
+    } else {
+      // Fallback: copy to clipboard
+      navigator.clipboard.writeText(shareText).then(() => {
+        alert('Link copied to clipboard!');
+      });
+    }
   };
 
   // Initial load - fetch weather when location is detected
@@ -241,17 +348,7 @@ function App() {
 
         {/* Loading State */}
         {isLoading && selectedLocation && (
-          <div style={{
-            backgroundColor: '#FFFFFF',
-            border: '2px solid #D0D0D0',
-            padding: '40px',
-            textAlign: 'center',
-            marginBottom: '24px',
-            fontSize: '18px',
-            color: '#4A4A4A'
-          }}>
-            Checking conditions...
-          </div>
+          <LoadingSpinner message="Checking conditions..." />
         )}
 
         {!isLoading && weatherData && selectedLocation && (
@@ -268,30 +365,59 @@ function App() {
             {/* 3. WHAT IS HAPPENING? */}
             <PlainWeatherInfo weather={weatherData} />
 
-            {/* 3.5 VIEW TRENDS BUTTON */}
-            <button
-              onClick={() => setShowTrends(true)}
-              style={{
-                width: '100%',
-                backgroundColor: '#FFFFFF',
-                border: '3px solid #0066CC',
-                color: '#0066CC',
-                padding: '16px 24px',
-                fontSize: '18px',
-                fontWeight: '700',
-                cursor: 'pointer',
-                marginBottom: '24px',
-                transition: 'all 0.2s'
-              }}
-              onMouseEnter={(e) => {
-                e.target.style.backgroundColor = '#E8F4FD';
-              }}
-              onMouseLeave={(e) => {
-                e.target.style.backgroundColor = '#FFFFFF';
-              }}
-            >
-              📊 View 24-Hour Trends
-            </button>
+            {/* 3.5 FORECAST PANEL */}
+            {forecast && forecast.length > 0 && (
+              <ForecastPanel forecast={forecast} location={selectedLocation} />
+            )}
+
+            {/* 3.6 VIEW TRENDS & SHARE BUTTONS */}
+            <div style={{ display: 'flex', gap: '12px', marginBottom: '24px' }}>
+              <button
+                onClick={() => setShowTrends(true)}
+                style={{
+                  flex: 1,
+                  backgroundColor: '#FFFFFF',
+                  border: '3px solid #0066CC',
+                  color: '#0066CC',
+                  padding: '16px 24px',
+                  fontSize: '16px',
+                  fontWeight: '700',
+                  cursor: 'pointer',
+                  transition: 'all 0.2s'
+                }}
+                onMouseEnter={(e) => {
+                  e.target.style.backgroundColor = '#E8F4FD';
+                }}
+                onMouseLeave={(e) => {
+                  e.target.style.backgroundColor = '#FFFFFF';
+                }}
+              >
+                📊 View Trends
+              </button>
+              
+              <button
+                onClick={handleShare}
+                style={{
+                  flex: 1,
+                  backgroundColor: '#FFFFFF',
+                  border: '3px solid #2D5F3F',
+                  color: '#2D5F3F',
+                  padding: '16px 24px',
+                  fontSize: '16px',
+                  fontWeight: '700',
+                  cursor: 'pointer',
+                  transition: 'all 0.2s'
+                }}
+                onMouseEnter={(e) => {
+                  e.target.style.backgroundColor = '#E8F9E8';
+                }}
+                onMouseLeave={(e) => {
+                  e.target.style.backgroundColor = '#FFFFFF';
+                }}
+              >
+                🔗 Share
+              </button>
+            </div>
 
             {/* 4. ACTION BUTTON */}
             <BigAlertButton onClick={() => setShowRegistration(true)} />

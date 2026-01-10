@@ -1,5 +1,4 @@
 import React, { useState } from 'react';
-import { User, Mail, Phone, MapPin, Bell, Check } from 'lucide-react';
 
 export default function UserRegistration({ onClose }) {
   const [formData, setFormData] = useState({
@@ -57,37 +56,123 @@ export default function UserRegistration({ onClose }) {
 
   if (success) {
     return (
-      <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-        <div className="bg-white rounded-lg p-8 max-w-md w-full text-center">
-          <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
-            <Check className="w-8 h-8 text-green-600" />
+      <div style={{
+        position: 'fixed',
+        inset: 0,
+        backgroundColor: 'rgba(0, 0, 0, 0.8)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 1000,
+        padding: '16px'
+      }}>
+        <div style={{
+          backgroundColor: '#2D5F3F',
+          border: '3px solid #1B3A26',
+          padding: '32px',
+          maxWidth: '500px',
+          width: '100%',
+          textAlign: 'center'
+        }}>
+          <div style={{
+            width: '60px',
+            height: '60px',
+            backgroundColor: '#F7F6F2',
+            border: '3px solid #1B3A26',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            margin: '0 auto 20px',
+            fontSize: '32px'
+          }}>
+            ✓
           </div>
-          <h3 className="text-2xl font-bold text-gray-800 mb-2">Registration Successful!</h3>
-          <p className="text-gray-600">You will receive disaster alerts for {formData.location}</p>
+          <h3 style={{
+            fontSize: '18px',
+            fontWeight: '700',
+            color: '#F7F6F2',
+            marginBottom: '12px',
+            textTransform: 'uppercase',
+            letterSpacing: '1px'
+          }}>
+            REGISTRATION SUCCESSFUL
+          </h3>
+          <p style={{ color: '#C9E4D4', fontSize: '14px' }}>
+            You will receive disaster alerts for {formData.location}
+          </p>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-lg p-6 max-w-md w-full max-h-[90vh] overflow-y-auto">
-        <div className="flex justify-between items-center mb-6">
-          <h2 className="text-2xl font-bold text-gray-800">Register for Disaster Alerts</h2>
+    <div style={{
+      position: 'fixed',
+      inset: 0,
+      backgroundColor: 'rgba(0, 0, 0, 0.8)',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      zIndex: 1000,
+      padding: '16px'
+    }}>
+      <div style={{
+        backgroundColor: '#F7F6F2',
+        border: '3px solid #2B2B2B',
+        maxWidth: '500px',
+        width: '100%',
+        maxHeight: '90vh',
+        overflow: 'auto'
+      }}>
+        {/* Header */}
+        <div style={{
+          backgroundColor: '#2B2B2B',
+          color: '#F7F6F2',
+          padding: '16px 20px',
+          borderBottom: '3px solid #000000',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center'
+        }}>
+          <h2 style={{
+            fontSize: '16px',
+            fontWeight: '700',
+            margin: 0,
+            textTransform: 'uppercase',
+            letterSpacing: '1px'
+          }}>
+            REGISTER FOR DISASTER ALERTS
+          </h2>
           <button
             onClick={onClose}
-            className="text-gray-500 hover:text-gray-700 text-2xl"
+            style={{
+              background: 'none',
+              border: '2px solid #F7F6F2',
+              color: '#F7F6F2',
+              fontSize: '20px',
+              width: '32px',
+              height: '32px',
+              cursor: 'pointer',
+              fontWeight: '700'
+            }}
           >
             ×
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
+        {/* Form */}
+        <form onSubmit={handleSubmit} style={{ padding: '24px' }}>
           {/* Name */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              <User className="inline w-4 h-4 mr-1" />
-              Full Name
+          <div style={{ marginBottom: '16px' }}>
+            <label style={{
+              display: 'block',
+              fontSize: '12px',
+              fontWeight: '700',
+              marginBottom: '6px',
+              textTransform: 'uppercase',
+              letterSpacing: '0.5px'
+            }}>
+              ⚪ FULL NAME
             </label>
             <input
               type="text"
@@ -95,16 +180,30 @@ export default function UserRegistration({ onClose }) {
               value={formData.name}
               onChange={handleChange}
               required
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent"
-              placeholder="John Doe"
+              style={{
+                width: '100%',
+                padding: '12px',
+                border: '2px solid #4A4A4A',
+                backgroundColor: '#FFFFFF',
+                fontSize: '14px',
+                fontFamily: 'Arial, sans-serif',
+                boxSizing: 'border-box'
+              }}
+              placeholder="Name"
             />
           </div>
 
           {/* Email */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              <Mail className="inline w-4 h-4 mr-1" />
-              Email Address
+          <div style={{ marginBottom: '16px' }}>
+            <label style={{
+              display: 'block',
+              fontSize: '12px',
+              fontWeight: '700',
+              marginBottom: '6px',
+              textTransform: 'uppercase',
+              letterSpacing: '0.5px'
+            }}>
+              ✉ EMAIL ADDRESS
             </label>
             <input
               type="email"
@@ -112,16 +211,30 @@ export default function UserRegistration({ onClose }) {
               value={formData.email}
               onChange={handleChange}
               required
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent"
-              placeholder="john@example.com"
+              style={{
+                width: '100%',
+                padding: '12px',
+                border: '2px solid #4A4A4A',
+                backgroundColor: '#FFFFFF',
+                fontSize: '14px',
+                fontFamily: 'Arial, sans-serif',
+                boxSizing: 'border-box'
+              }}
+              placeholder="email@example.com"
             />
           </div>
 
           {/* Phone */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              <Phone className="inline w-4 h-4 mr-1" />
-              Phone Number
+          <div style={{ marginBottom: '16px' }}>
+            <label style={{
+              display: 'block',
+              fontSize: '12px',
+              fontWeight: '700',
+              marginBottom: '6px',
+              textTransform: 'uppercase',
+              letterSpacing: '0.5px'
+            }}>
+              ☎ PHONE NUMBER
             </label>
             <input
               type="tel"
@@ -129,16 +242,30 @@ export default function UserRegistration({ onClose }) {
               value={formData.phone}
               onChange={handleChange}
               required
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+              style={{
+                width: '100%',
+                padding: '12px',
+                border: '2px solid #4A4A4A',
+                backgroundColor: '#FFFFFF',
+                fontSize: '14px',
+                fontFamily: 'Arial, sans-serif',
+                boxSizing: 'border-box'
+              }}
               placeholder="+1234567890"
             />
           </div>
 
           {/* Location */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              <MapPin className="inline w-4 h-4 mr-1" />
-              Location
+          <div style={{ marginBottom: '16px' }}>
+            <label style={{
+              display: 'block',
+              fontSize: '12px',
+              fontWeight: '700',
+              marginBottom: '6px',
+              textTransform: 'uppercase',
+              letterSpacing: '0.5px'
+            }}>
+              📍 LOCATION
             </label>
             <input
               type="text"
@@ -146,46 +273,99 @@ export default function UserRegistration({ onClose }) {
               value={formData.location}
               onChange={handleChange}
               required
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-transparent"
+              style={{
+                width: '100%',
+                padding: '12px',
+                border: '2px solid #4A4A4A',
+                backgroundColor: '#FFFFFF',
+                fontSize: '14px',
+                fontFamily: 'Arial, sans-serif',
+                boxSizing: 'border-box'
+              }}
               placeholder="Mumbai, Delhi, etc."
             />
           </div>
 
           {/* Notification Preference */}
-          <div className="flex items-center space-x-3 p-4 bg-orange-50 rounded-lg">
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '12px',
+            padding: '12px',
+            backgroundColor: '#E9E8E3',
+            border: '2px solid #4A4A4A',
+            marginBottom: '16px'
+          }}>
             <input
               type="checkbox"
               name="notify_disasters"
               checked={formData.notify_disasters}
               onChange={handleChange}
-              className="w-5 h-5 text-orange-600 rounded focus:ring-orange-500"
+              style={{
+                width: '18px',
+                height: '18px',
+                cursor: 'pointer'
+              }}
             />
-            <label className="text-sm text-gray-700 flex items-center">
-              <Bell className="w-4 h-4 mr-2 text-orange-600" />
-              Send me disaster alerts and warnings
+            <label style={{
+              fontSize: '13px',
+              fontWeight: '700',
+              margin: 0,
+              cursor: 'pointer',
+              flex: 1
+            }}>
+              🔔 SEND ME DISASTER ALERTS AND WARNINGS
             </label>
-          </div>
+          </div>                    
 
           {/* Error Message */}
           {error && (
-            <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
-              <p className="text-sm text-red-600">{error}</p>
+            <div style={{
+              padding: '12px',
+              backgroundColor: '#B71C1C',
+              border: '2px solid #8B0000',
+              color: '#FFFFFF',
+              marginBottom: '16px',
+              fontSize: '13px',
+              fontWeight: '700'
+            }}>
+              ⚠ {error}
             </div>
           )}
--
+
           {/* Submit Button */}
           <button
             type="submit"
             disabled={loading}
-            className="w-full bg-orange-500 text-white py-3 rounded-lg font-semibold hover:bg-orange-600 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed"
+            style={{
+              width: '100%',
+              padding: '14px',
+              backgroundColor: loading ? '#666666' : '#2B2B2B',
+              color: '#F7F6F2',
+              border: '2px solid #000000',
+              fontSize: '14px',
+              fontWeight: '700',
+              cursor: loading ? 'not-allowed' : 'pointer',
+              textTransform: 'uppercase',
+              letterSpacing: '1px',
+              boxSizing: 'border-box'
+            }}
           >
-            {loading ? 'Registering...' : 'Register for Alerts'}
+            {loading ? 'REGISTERING...' : 'REGISTER FOR ALERTS'}
           </button>
         </form>
 
-        <p className="text-xs text-gray-500 mt-4 text-center">
-          Your information will be used only for sending disaster alerts. We respect your privacy.
-        </p>
+        {/* Footer */}
+        <div style={{
+          padding: '16px 24px',
+          backgroundColor: '#E9E8E3',
+          borderTop: '2px solid #4A4A4A',
+          fontSize: '11px',
+          color: '#666',
+          textAlign: 'center'
+        }}>
+          YOUR INFORMATION WILL BE USED ONLY FOR SENDING DISASTER ALERTS. WE RESPECT YOUR PRIVACY. IGNORE THIS IF YOU ARE REGISTERED ALREADY.
+        </div>
       </div>
     </div>
   );

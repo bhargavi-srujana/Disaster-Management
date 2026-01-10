@@ -1,0 +1,29 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Places collection - read by anyone, write only by server
+    match /places/{place} {
+      allow read: if true;
+      allow write: if false; // Only backend can write
+      
+      // History subcollection
+      match /history/{historyId} {
+        allow read: if true;
+        allow write: if false; // Only backend can write
+      }
+    }
+    
+    // Users collection - restricted access
+    match /users/{userId} {
+      // Users can read their own data by email
+      allow read: if request.auth != null && request.auth.token.email == resource.data.email;
+      // Anyone can create (register)
+      allow create: if request.resource.data.keys().hasAll(['name', 'email', 'phone', 'location', 'notify_disasters']);
+      // Users can update their own data
+      allow update: if request.auth != null && request.auth.token.email == resource.data.email;
+      // Users can delete their own data
+      allow delete: if request.auth != null && request.auth.token.email == resource.data.email;
+    }
+  }
+}
