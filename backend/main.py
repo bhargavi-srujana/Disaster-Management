@@ -416,8 +416,8 @@ def get_mock_data(scenario_name):
     except FileNotFoundError:
         return None
 
-# Configurable list of places to monitor
-MONITORED_PLACES = ["Mumbai", "Delhi", "Chennai", "Kolkata", "Bangalore", "Hyderabad", "Pune", "Ahmedabad"]
+# Configurable list of places to monitor (empty = on-demand only)
+MONITORED_PLACES = []  # No automatic monitoring - API first, DB fallback
 LAST_BG_INGEST = datetime.min.replace(tzinfo=timezone.utc) # Cooldown tracker
 
 def check_and_trigger_alerts(loc_name, risk_res, background_tasks=None):
@@ -509,13 +509,13 @@ async def get_weather_risk(
             "history_count": len(mock_history)
         }
 
-    # 2. Attempt Live API Fetch
+    # 2. API FIRST - Try live API, use DB only as fallback
     api_error = None
     weather_data = None
     lat, lon = None, None
 
     try:
-        # Optimization: Check DB for coordinates first to avoid slow geocoding API
+        # Get coordinates (check DB cache first for efficiency)
         if db:
             doc_ref = db.collection('places').document(location)
             doc = doc_ref.get()
@@ -530,14 +530,8 @@ async def get_weather_risk(
             if lat is None:
                 raise HTTPException(status_code=404, detail=f"Location '{original_name}' not found")
 
-        # Check if this is a new location (no history in database)
-        is_new_location = False
-        if db:
-            doc_ref = db.collection('places').document(location)
-            doc = doc_ref.get()
-            if not doc.exists:
-                is_new_location = True
-                print(f"New location detected: {location}. Will fetch historical data.")
+        # ALWAYS fetch fresh data from API (DB is fallback only)
+        print(f"Fetching live weather from API for {location}")
         
         # Fetch current + hourly data (Open-Meteo includes past 24hrs by default)
         weather_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,relative_humidity_2m,rain,wind_speed_10m,cloud_cover&hourly=temperature_2m,relative_humidity_2m,rain,wind_speed_10m,cloud_cover&past_hours=24"
@@ -555,15 +549,10 @@ async def get_weather_risk(
             "location": location
         }
         
-        # If new location, populate historical data immediately (not in background)
-        # so it's available for risk assessment in this response
-        if is_new_location and 'hourly' in api_response:
-            print(f"Populating historical data immediately for {location}")
-            populate_historical_data(location, api_response['hourly'], (lat, lon))
-        
-        # Save current weather data
+        # Save current weather data to DB in background (for fallback cache)
         background_tasks.add_task(save_weather_data, location, weather_data, (lat, lon))
         source = "live_api"
+        print(f"Live API data retrieved for {location}")
 
     except Exception as e:
         print(f"API Fetch Failed for {location}: {e}")
@@ -636,46 +625,24 @@ async def manual_refresh_head(background_tasks: BackgroundTasks):
 
 
 def ingest_weather(event=None, context=None):
-    """Ingests data for all monitored places and any existing locations in Firestore."""
+    """Ingests data for monitored places only (no auto-monitoring from DB)."""
     print(f"\n--- [SCHEDULER] Starting Global Ingestion: {datetime.now()} ---")
     
-    # 1. Identify all places to update
-    # We combine the hardcoded MONITORED_PLACES with whatever is already in the DB
-    places_to_process = [] # List of dicts: {'name': str, 'lat': float, 'lon': float}
+    # Only monitor hardcoded MONITORED_PLACES (currently empty = no automatic monitoring)
+    # This prevents quota issues from user-searched cities being auto-monitored
+    if not MONITORED_PLACES:
+        print("No cities configured for automatic monitoring. System is on-demand only.")
+        return "OK"
     
-    # Add hardcoded defaults
+    places_to_process = []
+    
+    # Add only hardcoded places
     for p in MONITORED_PLACES:
         places_to_process.append({'name': p, 'lat': None, 'lon': None})
 
-    # Add dynamic places from DB
-    if db:
-        try:
-            docs = db.collection('places').stream()
-            for doc in docs:
-                data = doc.to_dict()
-                loc_id = doc.id
-                coords = data.get('coordinates', {})
-                # Use normalized ID as name if original not found, but prefer stored coords
-                places_to_process.append({
-                    'name': data.get('location', loc_id), 
-                    'lat': coords.get('lat'), 
-                    'lon': coords.get('lon')
-                })
-        except Exception as e:
-            print(f"Error fetching existing places from DB: {e}")
-
-    # De-duplicate by normalized name to avoid double-fetching
-    seen = set()
-    unique_places = []
-    for p in places_to_process:
-        norm = normalize_location(p['name'])
-        if norm not in seen:
-            seen.add(norm)
-            unique_places.append(p)
-
-    print(f"Found {len(unique_places)} unique locations to update.")
+    print(f"Monitoring {len(places_to_process)} configured locations.")
     
-    for place in unique_places:
+    for place in places_to_process:
         try:
             name = place['name']
             lat, lon = place['lat'], place['lon']
