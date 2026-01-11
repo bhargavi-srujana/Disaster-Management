@@ -594,13 +594,16 @@ async def get_weather_risk(
         # ALWAYS fetch fresh data from API (DB is fallback only)
         print(f"Fetching live weather from API for {location}")
         
-        # Fetch current + hourly data (past 24hrs + future 48hrs forecast)
-        weather_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,relative_humidity_2m,rain,wind_speed_10m,cloud_cover&hourly=temperature_2m,relative_humidity_2m,rain,wind_speed_10m,cloud_cover,weather_code&past_hours=24&forecast_hours=48&timezone=auto"
+        # Fetch current + hourly forecast data (next 7 days, hourly)
+        # Note: Open-Meteo free tier doesn't support past_hours, so we use forecast_days for future trends
+        weather_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,relative_humidity_2m,rain,wind_speed_10m,cloud_cover&hourly=temperature_2m,relative_humidity_2m,rain,wind_speed_10m,cloud_cover,weather_code&forecast_days=3&timezone=auto"
         resp = requests.get(weather_url, timeout=10)
         resp.raise_for_status()
         api_response = resp.json()
         api_data = api_response['current']
-        hourly_data = api_response.get('hourly', {})  # 24-hour data from API
+        hourly_data = api_response.get('hourly', {})  # Hourly forecast data from API
+        print(f"Hourly data keys: {list(hourly_data.keys()) if hourly_data else 'None'}")
+        print(f"Number of hourly data points: {len(hourly_data.get('time', [])) if hourly_data else 0}")
 
         weather_data = {
             "temp": api_data['temperature_2m'],
@@ -616,10 +619,13 @@ async def get_weather_risk(
         source = "live_api"
         print(f"Live API data retrieved for {location}")
         
-        # Store hourly data for trends view (past 24hrs)
+        # Store hourly data for trends view (forecast data)
         api_hourly_trends = format_hourly_trends(hourly_data) if hourly_data else []
+        print(f"Formatted {len(api_hourly_trends)} hourly trend data points")
         
         # Extract forecast data (next 48 hours)
+        forecast_data = extract_forecast(hourly_data) if hourly_data else []
+        print(f"Extracted {len(forecast_data)} forecast data points")
         forecast_data = extract_forecast(hourly_data) if hourly_data else []
 
     except Exception as e:
