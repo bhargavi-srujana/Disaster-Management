@@ -193,6 +193,14 @@ function App() {
         }
       }));
     } catch (err) {
+      // Clear old data when there's an error
+      setWeatherData(null);
+      setRiskAssessment(null);
+      setHistoryData([]);
+      setHourlyTrends([]);
+      setForecast([]);
+      setHasExtendedHistory(false);
+      
       // If auto-detected location failed, show welcome screen
       if (isAutoDetected) {
         setSelectedLocation('');
