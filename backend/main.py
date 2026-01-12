@@ -419,6 +419,31 @@ def format_hourly_trends(hourly_data: dict) -> list:
     return trends
 
 
+def format_hourly_trends_from_history(history: list) -> list:
+    """Convert Firestore history to trends format for fallback."""
+    if not history:
+        return []
+    
+    trends = []
+    for record in reversed(history):  # Reverse to show oldest first
+        timestamp = record.get('timestamp')
+        if isinstance(timestamp, str):
+            time_str = timestamp
+        else:
+            time_str = timestamp.isoformat() if timestamp else None
+            
+        if time_str:
+            trends.append({
+                'time': time_str,
+                'temp': record.get('temp'),
+                'humidity': record.get('humidity'),
+                'rain': record.get('rain_1h', 0),
+                'wind': record.get('wind_speed')
+            })
+    
+    return trends
+
+
 def extract_forecast(hourly_data: dict) -> list:
     """Extracts next 48 hours of forecast data from Open-Meteo hourly response."""
     if not hourly_data or 'time' not in hourly_data:
@@ -666,6 +691,11 @@ async def get_weather_risk(
             history.insert(0, current_snapshot)
 
     risk_result = risk_engine.evaluate_risk(history)
+    
+    # 5. Use Firestore history as fallback for trends if API didn't provide hourly data
+    if not api_hourly_trends and history:
+        print(f"Using Firestore history as trends fallback for {location}")
+        api_hourly_trends = format_hourly_trends_from_history(history)
     
     # Check and trigger alerts
     check_and_trigger_alerts(location, risk_result, background_tasks)
