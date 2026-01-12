@@ -594,9 +594,9 @@ async def get_weather_risk(
         # ALWAYS fetch fresh data from API (DB is fallback only)
         print(f"Fetching live weather from API for {location}")
         
-        # Fetch current + hourly forecast data (next 7 days, hourly)
+        # Fetch current + hourly forecast data (limited to 2 days for 48-hour forecast)
         # Note: Open-Meteo free tier doesn't support past_hours, so we use forecast_days for future trends
-        weather_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,relative_humidity_2m,rain,wind_speed_10m,cloud_cover&hourly=temperature_2m,relative_humidity_2m,rain,wind_speed_10m,cloud_cover,weather_code&forecast_days=3&timezone=auto"
+        weather_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,relative_humidity_2m,rain,wind_speed_10m,cloud_cover&hourly=temperature_2m,relative_humidity_2m,rain,wind_speed_10m,cloud_cover,weather_code&forecast_days=2&timezone=auto"
         resp = requests.get(weather_url, timeout=10)
         resp.raise_for_status()
         api_response = resp.json()
