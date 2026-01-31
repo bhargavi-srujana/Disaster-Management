@@ -35,7 +35,7 @@ A real-time disaster early warning platform that analyzes weather patterns to de
 
 ### Tech Stack
 - **Backend**: FastAPI (Python) + Google Firestore
-- **Frontend**: React 18 + Tailwind CSS + Recharts
+- **Frontend**: React 18 + Tailwind CSS 
 - **APIs**: Open-Meteo (weather), BigDataCloud (geocoding), SendGrid (alerts)
 
 ### Project Structure
@@ -103,25 +103,6 @@ User Search → Geocode → Open-Meteo API → Save to Firestore
 
 ---
 
-## 📝 Environment Variables
-
-**Backend (.env):**
-```bash
-GOOGLE_CREDENTIALS_JSON='{...}'  # Firestore credentials
-SENDGRID_API_KEY='SG.xxx'        # Email service
-SENDGRID_FROM_EMAIL='alerts@yourdomain.com'
-ALLOWED_ORIGINS='http://localhost:3000'  # CORS
-```
-
-**Frontend (.env):**
-```bash
-REACT_APP_API_URL='http://localhost:8080'  # Backend URL
-```
-
----
-
-## 🧪 Testing
-
 **Simulation Mode:**
 ```bash
 # Test flood scenario
@@ -152,10 +133,6 @@ python backend/cleanup_future_history.py
 
 ---
 
-## 📄 License
-
-MIT License - Feel free to use for disaster preparedness initiatives
-## 🚀 Setup & Deployment
 
 ### Environment Variables
 

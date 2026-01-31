@@ -2,28 +2,32 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     
-    // Places collection - read by anyone, write only by server
-    match /places/{place} {
-      allow read: if true;
-      allow write: if false; // Only backend can write
-      
-      // History subcollection
-      match /history/{historyId} {
-        allow read: if true;
-        allow write: if false; // Only backend can write
-      }
+    // Users collection - allow read/write for authenticated users
+    match /users/{userId} {
+      allow read, write: if true;
     }
     
-    // Users collection - restricted access
-    match /users/{userId} {
-      // Users can read their own data by email
-      allow read: if request.auth != null && request.auth.token.email == resource.data.email;
-      // Anyone can create (register)
-      allow create: if request.resource.data.keys().hasAll(['name', 'email', 'phone', 'location', 'notify_disasters']);
-      // Users can update their own data
-      allow update: if request.auth != null && request.auth.token.email == resource.data.email;
-      // Users can delete their own data
-      allow delete: if request.auth != null && request.auth.token.email == resource.data.email;
+    // Weather history collection - allow read for all, write for server only
+    match /weather_history/{document=**} {
+      allow read: if true;
+      allow write: if true;
+    }
+    
+    // Monitored places collection
+    match /monitored_places/{placeId} {
+      allow read: if true;
+      allow write: if true;
+    }
+    
+    // Alerts collection
+    match /alerts/{alertId} {
+      allow read: if true;
+      allow write: if true;
+    }
+    
+    // Default: allow all (for development - restrict in production)
+    match /{document=**} {
+      allow read, write: if true;
     }
   }
 }
