@@ -17,7 +17,7 @@ app = FastAPI(title="Disaster Alert System")
 # Configure CORS with environment variable support
 ALLOWED_ORIGINS = os.getenv(
     "ALLOWED_ORIGINS", 
-    "http://localhost:3000,http://127.0.0.1:3000,https://disaster-management-67yd.vercel.app"
+    "http://localhost:3000,http://127.0.0.1:3000,https://disaster-management-67yd.vercel.app,https://disaster-management-mu.vercel.app"
 ).split(",")
 
 app.add_middleware(
@@ -484,13 +484,37 @@ def extract_forecast(hourly_data: dict) -> list:
 def get_coordinates(location: str):
     """Convert location name to lat/long using Open-Meteo Geocoding API."""
     url = f"https://geocoding-api.open-meteo.com/v1/search?name={location}&count=1&language=en&format=json"
-    response = requests.get(url, timeout=5)
+    response = requests.get(url, timeout=10)
     response.raise_for_status()
     data = response.json()
     if not data.get('results'):
         return None, None
     result = data['results'][0]
     return result['latitude'], result['longitude']
+
+def fetch_weather_with_retry(url: str, max_retries: int = 2, timeout: int = 30):
+    """Fetch weather data from API with retry logic and exponential backoff."""
+    last_error = None
+    
+    for attempt in range(max_retries + 1):
+        try:
+            if attempt > 0:
+                wait_time = 2 ** (attempt - 1)  # Exponential backoff: 1s, 2s
+                print(f"Retry attempt {attempt} after {wait_time}s delay...")
+                time.sleep(wait_time)
+            
+            response = requests.get(url, timeout=timeout)
+            response.raise_for_status()
+            return response.json(), None
+        except requests.exceptions.Timeout as e:
+            last_error = f"Request timed out after {timeout}s (attempt {attempt + 1}/{max_retries + 1})"
+            print(last_error)
+        except requests.exceptions.RequestException as e:
+            last_error = f"Request failed: {str(e)}"
+            print(last_error)
+            break  # Don't retry on non-timeout errors
+    
+    return None, last_error
 
 def get_mock_data(scenario_name):
     try:
@@ -622,9 +646,13 @@ async def get_weather_risk(
         # Fetch current + hourly forecast data (limited to 2 days for 48-hour forecast)
         # Note: Open-Meteo free tier doesn't support past_hours, so we use forecast_days for future trends
         weather_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,relative_humidity_2m,rain,wind_speed_10m,cloud_cover&hourly=temperature_2m,relative_humidity_2m,rain,wind_speed_10m,cloud_cover,weather_code&forecast_days=2&timezone=auto"
-        resp = requests.get(weather_url, timeout=10)
-        resp.raise_for_status()
-        api_response = resp.json()
+        
+        # Use retry logic with increased timeout
+        api_response, fetch_error = fetch_weather_with_retry(weather_url, max_retries=2, timeout=30)
+        
+        if not api_response:
+            raise Exception(fetch_error or "Failed to fetch weather data")
+        
         api_data = api_response['current']
         hourly_data = api_response.get('hourly', {})  # Hourly forecast data from API
         print(f"Hourly data keys: {list(hourly_data.keys()) if hourly_data else 'None'}")
@@ -673,9 +701,45 @@ async def get_weather_risk(
                 print(f"Serving cached data for {location} (Last verified: {captured_at})")
                 source = "verified_cache"
             else:
-                raise HTTPException(status_code=503, detail=f"Weather service unavailable and no cached data: {api_error}")
+                # Location found but no weather data - return partial response
+                print(f"Location {location} found (lat: {lat}, lon: {lon}) but no weather data available")
+                return {
+                    "status": "partial",
+                    "source": "location_only",
+                    "location": location,
+                    "location_found": True,
+                    "coordinates": {"lat": lat, "lon": lon},
+                    "data": None,
+                    "error": api_error,
+                    "error_type": "weather_api_timeout",
+                    "message": "Location detected successfully but weather data is temporarily unavailable. Please try again in a moment.",
+                    "risk_assessment": None,
+                    "history_count": 0,
+                    "history": [],
+                    "hourly_trends": [],
+                    "forecast": [],
+                    "has_extended_history": False
+                }
         else:
-            raise HTTPException(status_code=503, detail=f"Weather service unavailable: {api_error}")
+            # No database, return partial response with location info
+            print(f"Location {location} found but weather service unavailable and no database")
+            return {
+                "status": "partial",
+                "source": "location_only",
+                "location": location,
+                "location_found": True,
+                "coordinates": {"lat": lat, "lon": lon},
+                "data": None,
+                "error": api_error,
+                "error_type": "weather_api_timeout",
+                "message": "Location detected successfully but weather data is temporarily unavailable. Please try again in a moment.",
+                "risk_assessment": None,
+                "history_count": 0,
+                "history": [],
+                "hourly_trends": [],
+                "forecast": [],
+                "has_extended_history": False
+            }
 
     # 4. Evaluate Risk based on History
     history = get_weather_history(location, hours=24)
@@ -767,9 +831,15 @@ def ingest_weather(event=None, context=None):
                 continue
                 
             weather_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,relative_humidity_2m,rain,wind_speed_10m,cloud_cover"
-            resp = requests.get(weather_url, timeout=5)
-            resp.raise_for_status()
-            api_data = resp.json()['current']
+            
+            # Use retry logic for background ingestion too
+            api_response, fetch_error = fetch_weather_with_retry(weather_url, max_retries=1, timeout=20)
+            
+            if not api_response:
+                print(f"Skipping {name}: Weather API failed - {fetch_error}")
+                continue
+            
+            api_data = api_response['current']
             
             weather = {
                 "temp": api_data['temperature_2m'],

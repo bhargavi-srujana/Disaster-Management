@@ -26,6 +26,8 @@ function App() {
   const [showTrends, setShowTrends] = useState(false);
   const [locationDetected, setLocationDetected] = useState(false);
   const [userCoordinates, setUserCoordinates] = useState(null);
+  const [weatherUnavailable, setWeatherUnavailable] = useState(false);
+  const [weatherError, setWeatherError] = useState(null);
 
   // Get user's location on first load
   useEffect(() => {
@@ -175,8 +177,31 @@ function App() {
   const fetchWeatherData = useCallback(async (location, isAutoDetected = false) => {
     setIsLoading(true);
     setError(null);
+    setWeatherUnavailable(false);
+    setWeatherError(null);
+    
     try {
       const data = await getWeatherRisk(location);
+      
+      // Handle partial response (location found but weather unavailable)
+      if (data.status === 'partial' && data.location_found) {
+        console.log('Location found but weather unavailable:', data);
+        setWeatherUnavailable(true);
+        setWeatherError(data.message || 'Weather data temporarily unavailable');
+        
+        // Keep location displayed
+        setWeatherData(null);
+        setRiskAssessment(null);
+        setHistoryData([]);
+        setHourlyTrends([]);
+        setForecast([]);
+        setHasExtendedHistory(false);
+        
+        // Don't clear location - keep it displayed
+        return;
+      }
+      
+      // Normal successful response
       setWeatherData(data.data);
       setRiskAssessment(data.risk_assessment);
       setHistoryData(data.history || []);
@@ -193,22 +218,25 @@ function App() {
         }
       }));
     } catch (err) {
-      // Clear old data when there's an error
+      console.error('Error fetching weather:', err);
+      
+      // If auto-detected location failed completely, show welcome screen
+      if (isAutoDetected) {
+        setSelectedLocation('');
+        console.log('Auto-detected location not found, showing welcome screen');
+      } else {
+        // For manual searches, keep location and show error
+        setWeatherUnavailable(true);
+        setWeatherError('Could not find that location. Please try a nearby major city.');
+      }
+      
+      // Clear weather data
       setWeatherData(null);
       setRiskAssessment(null);
       setHistoryData([]);
       setHourlyTrends([]);
       setForecast([]);
       setHasExtendedHistory(false);
-      
-      // If auto-detected location failed, show welcome screen
-      if (isAutoDetected) {
-        setSelectedLocation('');
-        console.log('Auto-detected location not found, showing welcome screen');
-      } else {
-        setError('Could not find that location. Please try a nearby major city.');
-      }
-      console.error('Error:', err);
     } finally {
       setIsLoading(false);
     }
@@ -354,12 +382,85 @@ function App() {
           </div>
         )}
 
+        {/* Weather Unavailable but Location Found */}
+        {weatherUnavailable && selectedLocation && !isLoading && (
+          <>
+            {/* 1. LOCATION BAR (showing location even without weather) */}
+            <SimpleLocationBar 
+              location={selectedLocation} 
+              lastUpdated={null}
+            />
+
+            {/* 2. WEATHER UNAVAILABLE MESSAGE */}
+            <div style={{
+              backgroundColor: '#FFF4E5',
+              border: '3px solid #F57C00',
+              padding: '24px',
+              marginBottom: '24px',
+              textAlign: 'center'
+            }}>
+              <div style={{
+                fontSize: '48px',
+                marginBottom: '16px'
+              }}>
+                ⏳
+              </div>
+              <div style={{
+                fontSize: '20px',
+                fontWeight: '700',
+                color: '#1A1A1A',
+                marginBottom: '12px'
+              }}>
+                Weather Data Temporarily Unavailable
+              </div>
+              <div style={{
+                fontSize: '16px',
+                color: '#2B2B2B',
+                lineHeight: '1.6',
+                marginBottom: '20px'
+              }}>
+                {weatherError || 'The weather service is experiencing delays. Your location was detected successfully.'}
+              </div>
+              <button
+                onClick={() => fetchWeatherData(selectedLocation)}
+                style={{
+                  backgroundColor: '#F57C00',
+                  color: '#FFFFFF',
+                  border: 'none',
+                  padding: '14px 28px',
+                  fontSize: '16px',
+                  fontWeight: '700',
+                  cursor: 'pointer',
+                  transition: 'all 0.2s'
+                }}
+                onMouseEnter={(e) => {
+                  e.target.style.backgroundColor = '#E65100';
+                }}
+                onMouseLeave={(e) => {
+                  e.target.style.backgroundColor = '#F57C00';
+                }}
+              >
+                🔄 Retry Now
+              </button>
+            </div>
+
+            {/* 3. REGISTRATION OPTION (still functional) */}
+            <BigAlertButton onClick={() => setShowRegistration(true)} />
+
+            {/* 4. CHANGE LOCATION */}
+            <SimpleLocationChanger
+              selectedLocation={selectedLocation}
+              onLocationChange={handleLocationChange}
+            />
+          </>
+        )}
+
         {/* Loading State */}
         {isLoading && selectedLocation && (
           <LoadingSpinner message="Checking conditions..." />
         )}
 
-        {!isLoading && weatherData && selectedLocation && (
+        {!isLoading && weatherData && selectedLocation && !weatherUnavailable && (
           <>
             {/* 1. ARE YOU SAFE? */}
             <CitizenStatusBox risk={riskAssessment} />
